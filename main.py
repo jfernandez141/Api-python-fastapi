@@ -60,6 +60,7 @@ engine = create_engine(db_uri, echo=True)
 Session = sessionmaker(bind=engine)
 session = Session()
 
+#NIY
 class APICallDB(Base):
     __tablename__ = "api_calls"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -73,33 +74,17 @@ Base.metadata.create_all(engine)
 #Definiendo rutas
 @app.post("/contacts")
 async def create_contact(contact: Contact):
-    return create_contact_in_hubspot(contact)
-
-
-@app.post("/clickup")
-async def create_clickup_task(name: dict):
-    task = get_clickup_task_by_name(name["name"])
-    if task:
-        return task
-    else:
-        return create_clickup_task(name["name"])
-
-
-@app.get("/clickup/{name}")
-async def get_clickup_task(name: str):
-    task = get_clickup_task_by_name(name)
-    if task:
-        return task
-    else:
-        raise HTTPException(status_code=404, detail="Task not found")
-
+    hubspot_vid = create_contact_in_hubspot(contact)
+    clickup_id = sync_contact_clickup(contact)
+    log_request(request.url, f"HubSpot VID: {hubspot_vid}, ClickUp ID: {clickup_id}")
+    return {"HubSpot VID": hubspot_vid}
 
 # Configuración de la API de HubSpot
 
 headers = {
     "Content-Type": "application/json",
-    "Authorization": f"Bearer {hubspot_api_key}"
-}
+    "Authorization": hubspot_api_key}
+
 
 hubspot_url = "https://api.hubapi.com/crm/v3/objects/contacts"
 
@@ -129,23 +114,24 @@ def create_contact_in_hubspot(contact: Contact) -> dict:
     response.raise_for_status()
     return response.json()
 
-def get_clickup_task_by_name(name: str) -> Optional[dict]:
-    response = requests.get(clickup_base_url + f"list/{clickup_list_id}/tasks", headers=clickup_headers)
-    response.raise_for_status()
-    tasks = response.json().get("tasks")
-    for task in tasks:
-        if task["name"] == name:
-            return task
-    return None
-
-def create_clickup_task(name: str) -> dict:
-    data = {
-        "name": name,
-        "description": "Nueva tarea creada desde la API de Python",
-        "status": "Open",
-        "priority": 3
+def sync_contact_clickup(contact: Contact):
+    url = "https://api.clickup.com/api/v2/contact"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": clickup_api_key
     }
-    response = requests.post(clickup_base_url + f"list/{clickup_list_id}/task", headers=clickup_headers, json=data)
-    response.raise_for_status()
-    return response.json()
+    data = {
+        "properties": [
+            {"property": "email", "value": contact.email},
+            {"property": "firstname", "value": contact.firstname},
+            {"property": "lastname", "value": contact.lastname},
+            {"property": "phone", "value": contact.phone},
+            {"property": "website", "value": contact.website},
+            {"property": "estado_clickup", "value": contact.estado_clickup}
+        ]
+    }
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+    return response.json()["id"]
 
